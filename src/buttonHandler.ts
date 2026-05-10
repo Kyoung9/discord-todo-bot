@@ -1,4 +1,4 @@
-import type { ButtonInteraction } from "discord.js";
+import { MessageFlags, type ButtonInteraction } from "discord.js";
 import { executeConfirmTodoPayload } from "./notion/confirmExecutor.js";
 import {
   deletePending,
@@ -7,6 +7,7 @@ import {
 import type { ConfirmTodoPayload } from "./types/confirmPayload.js";
 import { loadGuildContext } from "./runtime/guildContext.js";
 import { ja } from "./i18n/ja.js";
+import { formatCaughtError } from "./lib/formatCaughtError.js";
 
 export async function handleTodoConfirmButton(
   interaction: ButtonInteraction
@@ -23,7 +24,7 @@ export async function handleTodoConfirmButton(
   );
   if (!row || row.kind !== "todo_confirm") {
     await interaction.reply({
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
       content: "確認セッションの有効期限が切れました。もう一度お試しください。",
     });
     return true;
@@ -41,15 +42,18 @@ export async function handleTodoConfirmButton(
 
   await interaction.deferUpdate();
   const payload = row.payload;
-  const ctx = await loadGuildContext(payload.guildId);
-  if (!ctx) {
+  const loaded = await loadGuildContext(payload.guildId);
+  if (!loaded.ok) {
+    const content =
+      loaded.reason === "no_settings" ? ja.notionNotConnected : ja.notionCredentialMissing;
     await interaction.editReply({
-      content: ja.notionNotConnected,
+      content,
       embeds: [],
       components: [],
     });
     return true;
   }
+  const ctx = loaded.ctx;
 
   try {
     const { createdTaskIds } = await executeConfirmTodoPayload(ctx.tasksRepo, payload);
@@ -60,9 +64,9 @@ export async function handleTodoConfirmButton(
       components: [],
     });
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = formatCaughtError(e).slice(0, 500);
     await interaction.editReply({
-      content: ja.notionSaveFail(msg.slice(0, 500)),
+      content: ja.notionSaveFail(msg),
       embeds: [],
       components: [],
     });

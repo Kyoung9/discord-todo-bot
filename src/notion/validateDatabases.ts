@@ -1,10 +1,9 @@
 import { Client } from "@notionhq/client";
+import { AI_KEYS_PROPS, PROJECT_PROPS, TASK_PROPS } from "../config/notionSchema.js";
 import {
-  AI_KEYS_PROPS,
-  BOT_SETTINGS_PROPS,
-  PROJECT_PROPS,
-  TASK_PROPS,
-} from "../config/notionSchema.js";
+  isValidNotionDatabaseId,
+  normalizeNotionDatabaseId,
+} from "../lib/notionIdNormalize.js";
 
 function getPropTypes(db: {
   properties: Record<string, { type: string; relation?: { database_id: string } }>;
@@ -30,8 +29,22 @@ export async function validateNotionSetup(
   projectsDbId: string
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const client = new Client({ auth: notionToken });
-  const tasksId = tasksDbId.replace(/\s+/g, "");
-  const projectsId = projectsDbId.replace(/\s+/g, "");
+  const tasksId = normalizeNotionDatabaseId(tasksDbId);
+  const projectsId = normalizeNotionDatabaseId(projectsDbId);
+  if (!isValidNotionDatabaseId(tasksId)) {
+    return {
+      ok: false,
+      message:
+        "Tasks Database ID の形式が不正です。32 桁の ID、または Notion の DB ページ URL（?view= 付きでも可）を入力してください。",
+    };
+  }
+  if (!isValidNotionDatabaseId(projectsId)) {
+    return {
+      ok: false,
+      message:
+        "Projects Database ID の形式が不正です。32 桁の ID、または Notion の DB ページ URLを入力してください。",
+    };
+  }
 
   try {
     const tasksDb = await client.databases.retrieve({ database_id: tasksId });
@@ -104,29 +117,6 @@ export async function validateNotionSetup(
   }
 }
 
-function validateBotSettingsProps(props: Record<string, string>): string | null {
-  const checks: (string | null)[] = [
-    requireType(props, BOT_SETTINGS_PROPS.name, "title"),
-    requireType(props, BOT_SETTINGS_PROPS.discordGuildId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.discordGuildName, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.notionTasksDatabaseId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.notionProjectsDatabaseId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.notionSettingsDatabaseId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.notionAiKeysDatabaseId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.notionApiKey, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.aiEnabled, "checkbox"),
-    requireType(props, BOT_SETTINGS_PROPS.timezone, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.reminderChannelId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.adminRoleId, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.dailyAiRequestLimit, "number"),
-    requireType(props, BOT_SETTINGS_PROPS.dailyAiTokenLimit, "number"),
-    requireType(props, BOT_SETTINGS_PROPS.createdBy, "rich_text"),
-    requireType(props, BOT_SETTINGS_PROPS.createdAt, "date"),
-    requireType(props, BOT_SETTINGS_PROPS.updatedAt, "date"),
-  ];
-  return checks.find(Boolean) ?? null;
-}
-
 function validateAiKeysProps(props: Record<string, string>): string | null {
   const checks: (string | null)[] = [
     requireType(props, AI_KEYS_PROPS.name, "title"),
@@ -152,12 +142,11 @@ function validateAiKeysProps(props: Record<string, string>): string | null {
   return checks.find(Boolean) ?? null;
 }
 
-/** 4 DB（Tasks / Projects / Bot Settings / AI Keys）の検証 */
-export async function validateFourDbSetup(params: {
+/** Tasks / Projects / AI Keys の 3 DB 検証（ギルド設定は Supabase） */
+export async function validateThreeDbSetup(params: {
   notionToken: string;
   tasksDbId: string;
   projectsDbId: string;
-  botSettingsDbId: string;
   aiKeysDbId: string;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const base = await validateNotionSetup(
@@ -168,14 +157,17 @@ export async function validateFourDbSetup(params: {
   if (!base.ok) return base;
 
   const client = new Client({ auth: params.notionToken });
-  const bsId = params.botSettingsDbId.replace(/\s+/g, "");
-  const akId = params.aiKeysDbId.replace(/\s+/g, "");
+  const akId = normalizeNotionDatabaseId(params.aiKeysDbId);
+  if (!isValidNotionDatabaseId(akId)) {
+    return {
+      ok: false,
+      message:
+        "AI Keys Database ID の形式が不正です。32 桁の ID、または Notion の DB ページ URLを入力してください。",
+    };
+  }
 
   try {
-    const bs = await client.databases.retrieve({ database_id: bsId });
     const ak = await client.databases.retrieve({ database_id: akId });
-    const bsErr = validateBotSettingsProps(getPropTypes(bs));
-    if (bsErr) return { ok: false, message: bsErr };
     const akErr = validateAiKeysProps(getPropTypes(ak));
     if (akErr) return { ok: false, message: akErr };
     return { ok: true };

@@ -7,7 +7,7 @@ export const ja = {
   adminOnly: "このコマンドは管理者のみ使用できます。",
   notionSetupOk: "Notion 接続を保存しました。",
   notionSetupFail: (detail: string) =>
-    `Notion 接続に失敗しました。\n\n${detail}\n\n1. Integration Secret\n2. 4 つの DB へ接続\n3. Database ID\n4. 必須プロパティ`,
+    `Notion 接続に失敗しました。\n\n${detail}\n\n1. Integration Secret\n2. Tasks / Projects / AI Keys DB へ接続\n3. Database ID\n4. 必須プロパティ`,
   timezoneSet: (tz: string) => `タイムゾーン: ${tz}`,
   channelSet: (id: string) => `通知チャンネル: <#${id}>`,
   roleSet: (id: string) => `管理者ロール: <@&${id}>`,
@@ -55,8 +55,15 @@ export const ja = {
     `AI キーがすべて失敗したため、入力文をそのまま Todo にします。\n理由: ${reason}`,
   aiNoKey: "利用可能な AI キーがありません。通常 Todo モードにします。",
   settingsNotFound: "設定が見つかりません。",
-  botSettingsDbMismatch:
-    "環境変数 NOTION_BOT_SETTINGS_DATABASE_ID と入力した Bot Settings DB ID が一致しません。",
   notionTokenMissing:
     "NOTION_TOKEN 環境変数か、コマンドの api_key オプションで Integration Secret を指定してください。",
+  /** ギルドは設定済みだが Notion Secret が解決できないとき（環境変数未設定・復号失敗など） */
+  notionCredentialMissing:
+    "Notion の Integration Secret が設定されていません。\n\n" +
+    "• **管理者**: `/setup-notion` の `api_key` に Integration Secret を入れて再接続する\n" +
+    "• **ホスト**: 環境変数 `NOTION_TOKEN` を設定する\n\n" +
+    "（Notion の [My integrations](https://www.notion.so/my-integrations) で Secret を確認できます）",
+  /** AI 有効だが AI Keys DB にキー行がないとき */
+  aiKeysHint:
+    "AI が有効ですが API キーが未登録です。管理者は `/setup-ai-key add` でキーを追加してください。",
 } as const;

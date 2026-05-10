@@ -13,8 +13,11 @@ import { runReminderTick } from "./services/reminderScheduler.js";
 if (!process.env.NOTION_TOKEN?.trim()) {
   throw new Error("NOTION_TOKEN is required");
 }
-if (!process.env.NOTION_BOT_SETTINGS_DATABASE_ID?.trim()) {
-  throw new Error("NOTION_BOT_SETTINGS_DATABASE_ID is required");
+if (!process.env.SUPABASE_URL?.trim() || !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
+  throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
+}
+if (!process.env.GUILD_SETTINGS_ENCRYPTION_KEY?.trim()) {
+  throw new Error("GUILD_SETTINGS_ENCRYPTION_KEY is required");
 }
 if (!process.env.DISCORD_TOKEN) {
   throw new Error("DISCORD_TOKEN is required");

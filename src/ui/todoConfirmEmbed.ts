@@ -1,7 +1,11 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
 import type { ConfirmTodoPayload } from "../types/confirmPayload.js";
 
-export function buildTodoConfirmEmbed(payload: ConfirmTodoPayload, title: string): EmbedBuilder {
+export function buildTodoConfirmEmbed(
+  payload: ConfirmTodoPayload,
+  title: string,
+  footerHint?: string
+): EmbedBuilder {
   const lines: string[] = [];
   if (payload.createProject) {
     lines.push(
@@ -22,9 +26,13 @@ export function buildTodoConfirmEmbed(payload: ConfirmTodoPayload, title: string
       `原文: ${payload.sourceText.slice(0, 500)}${payload.sourceText.length > 500 ? "…" : ""}`
     );
   }
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(lines.join("\n").slice(0, 4000));
+  if (footerHint?.trim()) {
+    embed.setFooter({ text: footerHint.trim().slice(0, 2048) });
+  }
+  return embed;
 }
 
 export function confirmButtonRow(shortId: string) {

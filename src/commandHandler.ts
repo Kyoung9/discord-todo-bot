@@ -1,19 +1,18 @@
 import {
   type ChatInputCommandInteraction,
+  MessageFlags,
   PermissionFlagsBits,
   inlineCode,
 } from "discord.js";
-import { Client } from "@notionhq/client";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Anthropic from "@anthropic-ai/sdk";
-import { validateFourDbSetup } from "./notion/validateDatabases.js";
+import { validateThreeDbSetup } from "./notion/validateDatabases.js";
 import {
-  archivePage,
-  findBotSettingsByGuild,
-  patchBotSettingsPage,
-  upsertBotSettingsPage,
-} from "./notion/botSettingsRepository.js";
+  deleteGuildSettings,
+  patchGuildSettings,
+  upsertGuildSettings,
+} from "./db/guildSettingsRepository.js";
 import {
   createAiKeyPage,
   deleteAiKeyPage,
@@ -36,6 +35,7 @@ import {
 } from "./services/todoConfirmBuilder.js";
 import { createPendingPayload } from "./services/pendingInteractionService.js";
 import { buildTodoConfirmEmbed, confirmButtonRow } from "./ui/todoConfirmEmbed.js";
+import { buildHelpEmbed } from "./ui/helpEmbed.js";
 import {
   saveOrderedTaskIds,
   resolveTaskPageIdByDisplayIndex,
@@ -45,6 +45,7 @@ import { formatRangeLabel } from "./lib/timezone.js";
 import type { TaskRow } from "./notion/notionRepository.js";
 import { loadGuildContext, type GuildContext } from "./runtime/guildContext.js";
 import { ja } from "./i18n/ja.js";
+import { formatCaughtError } from "./lib/formatCaughtError.js";
 
 function adminOnlyMessage(): string {
   return ja.adminOnly;
@@ -55,15 +56,17 @@ async function requireGuildContext(
 ): Promise<GuildContext | null> {
   const guildId = interaction.guildId;
   if (!guildId) {
-    await interaction.reply({ ephemeral: true, content: ja.guildOnly });
+    await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.guildOnly });
     return null;
   }
-  const ctx = await loadGuildContext(guildId);
-  if (!ctx) {
-    await interaction.reply({ ephemeral: true, content: ja.notionNotConnected });
+  const loaded = await loadGuildContext(guildId);
+  if (!loaded.ok) {
+    const content =
+      loaded.reason === "no_settings" ? ja.notionNotConnected : ja.notionCredentialMissing;
+    await interaction.reply({ flags: MessageFlags.Ephemeral, content });
     return null;
   }
-  return ctx;
+  return loaded.ctx;
 }
 
 function filterTasks(
@@ -142,117 +145,109 @@ async function testProviderPing(provider: string, apiKey: string): Promise<void>
 export async function handleChatInputCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
-  const guildId = interaction.guildId;
-  if (!guildId) {
-    await interaction.reply({ ephemeral: true, content: ja.guildOnly });
-    return;
-  }
-
   try {
+    if (interaction.commandName === "help-todo") {
+      await interaction.reply({ embeds: [buildHelpEmbed()], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.guildOnly });
+      return;
+    }
+
     switch (interaction.commandName) {
       case "setup-notion": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const apiKeyOpt = interaction.options.getString("api_key");
         const apiKey = (apiKeyOpt?.trim() || process.env.NOTION_TOKEN?.trim() || "").trim();
         if (!apiKey) {
-          await interaction.reply({ ephemeral: true, content: ja.notionTokenMissing });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.notionTokenMissing });
           return;
         }
         const tasksDb = interaction.options.getString("tasks_database_id", true);
         const projectsDb = interaction.options.getString("projects_database_id", true);
-        const botSettingsDb = interaction.options.getString("bot_settings_database_id", true);
         const aiKeysDb = interaction.options.getString("ai_keys_database_id", true);
-        const envBs = process.env.NOTION_BOT_SETTINGS_DATABASE_ID?.replace(/\s+/g, "");
-        const bsNorm = botSettingsDb.replace(/\s+/g, "");
-        if (envBs && envBs !== bsNorm) {
-          await interaction.reply({ ephemeral: true, content: ja.botSettingsDbMismatch });
-          return;
-        }
-        const v = await validateFourDbSetup({
+        const v = await validateThreeDbSetup({
           notionToken: apiKey,
           tasksDbId: tasksDb,
           projectsDbId: projectsDb,
-          botSettingsDbId: botSettingsDb,
           aiKeysDbId: aiKeysDb,
         });
         if (!v.ok) {
           await interaction.reply({
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             content: ja.notionSetupFail(v.message),
           });
           return;
         }
-        const client = new Client({ auth: apiKey });
         const gname = interaction.guild?.name ?? guildId;
-        await upsertBotSettingsPage({
-          client,
+        await upsertGuildSettings({
           guildId,
           guildName: gname,
           tasksDatabaseId: tasksDb,
           projectsDatabaseId: projectsDb,
           aiKeysDatabaseId: aiKeysDb,
-          settingsDatabaseId: bsNorm,
-          notionApiKey: apiKeyOpt?.trim() || null,
+          notionApiKeyPlain: apiKeyOpt?.trim() || null,
           createdBy: interaction.user.id,
         });
-        await interaction.reply({ ephemeral: true, content: ja.notionSetupOk });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.notionSetupOk });
         return;
       }
 
       case "setup-timezone": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
         if (!ctx) return;
         const tz = interaction.options.getString("timezone", true);
-        await patchBotSettingsPage(ctx.dataClient, ctx.settings.pageId, { timezone: tz });
-        await interaction.reply({ ephemeral: true, content: ja.timezoneSet(inlineCode(tz)) });
+        await patchGuildSettings(guildId, { timezone: tz });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.timezoneSet(inlineCode(tz)) });
         return;
       }
 
       case "setup-channel": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
         if (!ctx) return;
         const ch = interaction.options.getChannel("channel", true);
-        await patchBotSettingsPage(ctx.dataClient, ctx.settings.pageId, {
-          reminderChannelId: ch.id,
-        });
-        await interaction.reply({ ephemeral: true, content: ja.channelSet(ch.id) });
+        await patchGuildSettings(guildId, { reminderChannelId: ch.id });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.channelSet(ch.id) });
         return;
       }
 
       case "setup-role": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
         if (!ctx) return;
         const role = interaction.options.getRole("role", true);
-        await patchBotSettingsPage(ctx.dataClient, ctx.settings.pageId, { adminRoleId: role.id });
-        await interaction.reply({ ephemeral: true, content: ja.roleSet(role.id) });
+        await patchGuildSettings(guildId, { adminRoleId: role.id });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.roleSet(role.id) });
         return;
       }
 
       case "settings": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
         if (!ctx) return;
         const s = ctx.settings;
         await interaction.reply({
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
           content: ja.settingsSummary([
             `Notion: 接続済み`,
             `Timezone: ${s.timezone}`,
@@ -267,7 +262,7 @@ export async function handleChatInputCommand(
 
       case "disconnect-notion": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
@@ -278,33 +273,34 @@ export async function handleChatInputCommand(
           guildId
         );
         for (const k of keys) await deleteAiKeyPage(ctx.dataClient, k.pageId);
-        await archivePage(ctx.dataClient, ctx.settings.pageId);
-        await interaction.reply({ ephemeral: true, content: ja.disconnectOk });
+        await deleteGuildSettings(guildId);
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.disconnectOk });
         return;
       }
 
       case "delete-server-settings": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
-        const ctx = await loadGuildContext(guildId);
-        if (ctx) {
+        const loaded = await loadGuildContext(guildId);
+        if (loaded.ok) {
+          const ctx = loaded.ctx;
           const keys = await listAiKeysForGuild(
             ctx.dataClient,
             ctx.settings.aiKeysDatabaseId,
             guildId
           );
           for (const k of keys) await deleteAiKeyPage(ctx.dataClient, k.pageId);
-          await archivePage(ctx.dataClient, ctx.settings.pageId);
+          await deleteGuildSettings(guildId);
         }
-        await interaction.reply({ ephemeral: true, content: ja.deleteAllOk });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.deleteAllOk });
         return;
       }
 
       case "setup-ai-key": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
@@ -333,7 +329,7 @@ export async function handleChatInputCommand(
             createdBy: interaction.user.id,
             timezone: ctx.settings.timezone,
           });
-          await interaction.reply({ ephemeral: true, content: ja.aiKeySaved });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeySaved });
           return;
         }
         if (sub === "list") {
@@ -347,7 +343,7 @@ export async function handleChatInputCommand(
               `${i + 1}. ${k.keyName}\n   Provider: ${k.provider}\n   Priority: ${k.priority}\n   Status: ${k.status}`
           );
           await interaction.reply({
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             content: lines.length ? lines.join("\n\n") : ja.aiKeyListEmpty,
           });
           return;
@@ -361,11 +357,11 @@ export async function handleChatInputCommand(
             keyName
           );
           if (!row) {
-            await interaction.reply({ ephemeral: true, content: ja.aiKeyNotFound });
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyNotFound });
             return;
           }
           await updateAiKeyStatus(ctx.dataClient, row.pageId, "disabled");
-          await interaction.reply({ ephemeral: true, content: ja.aiKeyDisabled });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyDisabled });
           return;
         }
         if (sub === "remove") {
@@ -377,11 +373,11 @@ export async function handleChatInputCommand(
             keyName
           );
           if (!row) {
-            await interaction.reply({ ephemeral: true, content: ja.aiKeyNotFound });
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyNotFound });
             return;
           }
           await deleteAiKeyPage(ctx.dataClient, row.pageId);
-          await interaction.reply({ ephemeral: true, content: ja.aiKeyRemoved });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyRemoved });
           return;
         }
         if (sub === "priority") {
@@ -394,11 +390,11 @@ export async function handleChatInputCommand(
             keyName
           );
           if (!row) {
-            await interaction.reply({ ephemeral: true, content: ja.aiKeyNotFound });
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyNotFound });
             return;
           }
           await updateAiKeyPriority(ctx.dataClient, row.pageId, value);
-          await interaction.reply({ ephemeral: true, content: ja.aiKeyPriorityOk });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyPriorityOk });
           return;
         }
         if (sub === "test") {
@@ -410,18 +406,18 @@ export async function handleChatInputCommand(
             keyName
           );
           if (!row) {
-            await interaction.reply({ ephemeral: true, content: ja.aiKeyNotFound });
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyNotFound });
             return;
           }
           try {
             await testProviderPing(row.provider, row.apiKeyPlain);
             await interaction.reply({
-              ephemeral: true,
+              flags: MessageFlags.Ephemeral,
               content: ja.aiTestOk(String(row.provider)),
             });
           } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : String(e);
-            await interaction.reply({ ephemeral: true, content: ja.aiTestFail(msg.slice(0, 300)) });
+            const msg = formatCaughtError(e);
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiTestFail(msg.slice(0, 300)) });
           }
           return;
         }
@@ -442,7 +438,7 @@ export async function handleChatInputCommand(
           guildId,
           createdByUserId: interaction.user.id,
         });
-        await interaction.reply({ ephemeral: true, content: ja.projectCreated(name) });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectCreated(name) });
         return;
       }
 
@@ -460,7 +456,7 @@ export async function handleChatInputCommand(
           guildId,
           createdByUserId: interaction.user.id,
         });
-        await interaction.reply({ ephemeral: true, content: ja.eventCreated(name) });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.eventCreated(name) });
         return;
       }
 
@@ -473,7 +469,7 @@ export async function handleChatInputCommand(
           .join("\n")
           .slice(0, 3500);
         await interaction.reply({
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
           content: body.length ? body : ja.projectListEmpty,
         });
         return;
@@ -485,14 +481,14 @@ export async function handleChatInputCommand(
         const name = interaction.options.getString("project", true);
         const proj = await ctx.tasksRepo.queryProjectByName(guildId, name);
         if (!proj) {
-          await interaction.reply({ ephemeral: true, content: ja.projectNotFound });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectNotFound });
           return;
         }
         const tasks = await ctx.tasksRepo.queryTasksByProjectPageId(guildId, proj.pageId);
         const by = (st: string) => tasks.filter((t) => t.status === st);
         const fmt = (arr: TaskRow[]) => arr.map((t) => `- ${t.title}`).join("\n") || "(なし)";
         await interaction.reply({
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
           content: `**${name}**\n\nTodo\n${fmt(by("Todo"))}\n\nDoing\n${fmt(
             by("Doing")
           )}\n\nDone\n${fmt(by("Done"))}`.slice(0, 3500),
@@ -502,7 +498,7 @@ export async function handleChatInputCommand(
 
       case "project-edit": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
@@ -510,7 +506,7 @@ export async function handleChatInputCommand(
         const name = interaction.options.getString("name", true);
         const proj = await ctx.tasksRepo.queryProjectByName(guildId, name);
         if (!proj) {
-          await interaction.reply({ ephemeral: true, content: ja.projectNotFound });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectNotFound });
           return;
         }
         const newName = interaction.options.getString("new_name");
@@ -523,13 +519,13 @@ export async function handleChatInputCommand(
           startDateIso: start === null ? undefined : start ?? undefined,
           endDateIso: end === null ? undefined : end ?? undefined,
         });
-        await interaction.reply({ ephemeral: true, content: ja.projectUpdated });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectUpdated });
         return;
       }
 
       case "project-delete": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
@@ -537,11 +533,11 @@ export async function handleChatInputCommand(
         const name = interaction.options.getString("name", true);
         const proj = await ctx.tasksRepo.queryProjectByName(guildId, name);
         if (!proj) {
-          await interaction.reply({ ephemeral: true, content: ja.projectNotFound });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectNotFound });
           return;
         }
         await ctx.tasksRepo.archivePage(proj.pageId);
-        await interaction.reply({ ephemeral: true, content: ja.projectArchived });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectArchived });
         return;
       }
 
@@ -572,6 +568,7 @@ export async function handleChatInputCommand(
         );
         const keysExist = allKeys.some((k) => k.status !== "disabled");
         let aiFailedMessage: string | null = null;
+        let aiKeysFooterHint: string | undefined;
 
         if (ctx.settings.aiEnabled && keysExist && budget.ok) {
           let fallbackUsed = false;
@@ -622,6 +619,8 @@ export async function handleChatInputCommand(
           }
         } else if (!budget.ok) {
           aiFailedMessage = budget.message;
+        } else if (ctx.settings.aiEnabled && !keysExist && budget.ok) {
+          aiKeysFooterHint = ja.aiKeysHint;
         }
 
         if (aiFailedMessage) {
@@ -643,10 +642,11 @@ export async function handleChatInputCommand(
 
         const embed = buildTodoConfirmEmbed(
           payload,
-          aiFailedMessage ? ja.todoConfirmFallback : ja.todoConfirmTitle
+          aiFailedMessage ? ja.todoConfirmFallback : ja.todoConfirmTitle,
+          aiKeysFooterHint
         );
         await interaction.reply({
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
           embeds: [embed],
           components: [confirmButtonRow(shortId)],
         });
@@ -673,7 +673,7 @@ export async function handleChatInputCommand(
           );
         });
         await interaction.reply({
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
           content: lines.length
             ? `${ja.todoListTitle}\n\n${lines.join("\n\n")}`.slice(0, 3500)
             : ja.todoListEmpty,
@@ -691,7 +691,7 @@ export async function handleChatInputCommand(
           id
         );
         if (!pageId) {
-          await interaction.reply({ ephemeral: true, content: ja.listIndexHint });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.listIndexHint });
           return;
         }
         const title = interaction.options.getString("title");
@@ -717,7 +717,7 @@ export async function handleChatInputCommand(
           actionType: "updated",
           actedBy: interaction.user.id,
         });
-        await interaction.reply({ ephemeral: true, content: ja.todoUpdated });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.todoUpdated });
         return;
       }
 
@@ -731,7 +731,7 @@ export async function handleChatInputCommand(
           id
         );
         if (!pageId) {
-          await interaction.reply({ ephemeral: true, content: ja.listIndexHint });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.listIndexHint });
           return;
         }
         await ctx.tasksRepo.updateTaskStatus(pageId, "Done", interaction.user.id);
@@ -741,7 +741,7 @@ export async function handleChatInputCommand(
           actionType: "done",
           actedBy: interaction.user.id,
         });
-        await interaction.reply({ ephemeral: true, content: ja.todoDone(id) });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.todoDone(id) });
         return;
       }
 
@@ -756,13 +756,13 @@ export async function handleChatInputCommand(
           id
         );
         if (!pageId) {
-          await interaction.reply({ ephemeral: true, content: ja.listIndexHint });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.listIndexHint });
           return;
         }
         const admin =
           interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
         if (hard && !admin) {
-          await interaction.reply({ ephemeral: true, content: ja.hardDeleteAdminOnly });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.hardDeleteAdminOnly });
           return;
         }
         if (hard) {
@@ -773,7 +773,7 @@ export async function handleChatInputCommand(
             actionType: "deleted",
             actedBy: interaction.user.id,
           });
-          await interaction.reply({ ephemeral: true, content: ja.todoArchived });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.todoArchived });
         } else {
           await ctx.tasksRepo.updateTaskCanceled(pageId);
           await logTaskAction({
@@ -782,7 +782,7 @@ export async function handleChatInputCommand(
             actionType: "canceled",
             actedBy: interaction.user.id,
           });
-          await interaction.reply({ ephemeral: true, content: ja.todoCanceled });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.todoCanceled });
         }
         return;
       }
@@ -798,7 +798,7 @@ export async function handleChatInputCommand(
           parentIndex
         );
         if (!parentPageId) {
-          await interaction.reply({ ephemeral: true, content: ja.parentNotFound });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.parentNotFound });
           return;
         }
         await ctx.tasksRepo.createTask({
@@ -816,13 +816,13 @@ export async function handleChatInputCommand(
           afterValue: { title, parent: parentPageId },
           actedBy: interaction.user.id,
         });
-        await interaction.reply({ ephemeral: true, content: ja.subtaskCreated(title) });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.subtaskCreated(title) });
         return;
       }
 
       case "usage": {
         if (!(await isGuildAdmin(interaction))) {
-          await interaction.reply({ ephemeral: true, content: adminOnlyMessage() });
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
           return;
         }
         const ctx = await requireGuildContext(interaction);
@@ -831,7 +831,7 @@ export async function handleChatInputCommand(
         if (sub === "today") {
           const s = await getTodayUsageSummaryCtx(ctx);
           await interaction.reply({
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             content: ja.usageToday([
               `本日の AI 使用量`,
               `基準: ${formatRangeLabel(s.timezone, s.date)}`,
@@ -844,7 +844,7 @@ export async function handleChatInputCommand(
         if (sub === "month") {
           const m = await getMonthUsageAggregatesCtx(ctx);
           await interaction.reply({
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             content: ja.usageMonth(m.monthKey, m.requests, m.tokens),
           });
           return;
@@ -860,7 +860,7 @@ export async function handleChatInputCommand(
               `${k.keyName}: ${k.provider} prio=${k.priority} status=${k.status} today_req=${k.todayRequestCount}/${k.dailyRequestLimit}`
           );
           await interaction.reply({
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             content: ja.usageKeys(lines.join("\n").slice(0, 3500)),
           });
           return;
@@ -869,14 +869,14 @@ export async function handleChatInputCommand(
       }
 
       default:
-        await interaction.reply({ ephemeral: true, content: ja.unknownCommand });
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.unknownCommand });
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = formatCaughtError(e).slice(0, 500);
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ ephemeral: true, content: ja.error(msg.slice(0, 500)) });
+      await interaction.followUp({ flags: MessageFlags.Ephemeral, content: ja.error(msg) });
     } else {
-      await interaction.reply({ ephemeral: true, content: ja.error(msg.slice(0, 500)) });
+      await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.error(msg) });
     }
   }
 }

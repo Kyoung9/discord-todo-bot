@@ -1,26 +1,25 @@
-# Discord Todo Bot — Notion 4-DB (MCP で作成済みの参照)
-# このファイルはセットアップ用のコピペ用です。.env にそのままコミットしないでください。
+# Discord Todo Bot — Notion DB（Tasks / Projects / AI Keys のみ）
+# ギルド設定（どの DB を使うか・任意の Notion Secret）は Supabase の guild_settings に保存されます。
 
-## ヘブページ
+## ヘブページ（参考・MCP で作成した場合）
 https://www.notion.so/35cfad044dc281c0957acd674e2c59a5
 
-## データベース ID（/setup-notion 用・ハイフン付き UUID）
+## /setup-notion に渡す ID 例（ハイフン付き可）
 tasks_database_id=aaa1c81a-0520-4f25-a3e6-3ec30e8ad95c
 projects_database_id=51ac591f-52ca-4c71-abf3-ff232d1f1206
-bot_settings_database_id=956c3e2b-6adc-4eb1-abf5-6228ae87ad74
 ai_keys_database_id=b6381048-4e52-40b6-bb5f-4538407ac993
 
-## サーバー環境変数（Bot Settings DB は上と同じ ID）
-NOTION_BOT_SETTINGS_DATABASE_ID=956c3e2b-6adc-4eb1-abf5-6228ae87ad74
+## サーバー .env（必須）
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+GUILD_SETTINGS_ENCRYPTION_KEY=   # 64 hex 推奨
+NOTION_TOKEN=                    # 検証・フォールバック用 Integration Secret
+DISCORD_TOKEN=
 
-## Notion Integration（必須・手動）
-1. https://www.notion.so/my-integrations で Internal Integration を作成し Secret を NOTION_TOKEN に設定。
-2. 次を Integration に「接続」: ヘブページ、または 4 つのデータベース（Projects / Tasks / Bot Settings / AI Keys）すべて。
-3. .env に NOTION_TOKEN と NOTION_BOT_SETTINGS_DATABASE_ID を設定したうえで、次で検証可能:
-   npx tsx -e "import 'dotenv/config'; import { validateFourDbSetup } from './src/notion/validateDatabases.ts'; ..."
+## Supabase
+1. プロジェクト作成後、SQL Editor で supabase/migrations/20260210120000_guild_settings.sql を実行（または supabase db push）。
+2. バックエンドは service_role のみ使用（RLS は任意）。
 
-## Data source ID（デバッグ用）
-Projects collection: f6be27cd-38e7-4215-a084-51de95d3f702
-Tasks collection: 27dad73c-187f-4e74-9b38-26ba704e4b3f
-Bot Settings collection: 406bdb41-3109-4f9e-acdc-fbd2ff195766
-AI Keys collection: a2cec5d6-676b-4897-81d4-369d4075f21a
+## Notion Integration
+1. Internal Integration を作成し、Tasks / Projects / AI Keys の各 DB に接続。
+2. Secret は .env の NOTION_TOKEN と、必要なら /setup-notion の api_key でギルド行に暗号化保存。

@@ -1,14 +1,10 @@
 import type { Client, TextChannel } from "discord.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { TASK_PROPS } from "../config/notionSchema.js";
-import {
-  createBootstrapClient,
-  listAllBotSettings,
-  resolveIntegrationToken,
-} from "../notion/botSettingsRepository.js";
-import type { BotSettingsParsed } from "../notion/botSettingsRepository.js";
+import { listGuildSettingsForReminders } from "../db/guildSettingsRepository.js";
+import type { BotSettingsParsed } from "../types/guildSettings.js";
 import { createNotionRepository, type NotionRepository } from "../notion/notionRepository.js";
-import { Client as NotionClient } from "@notionhq/client";
+import { tryResolveIntegrationToken } from "../notion/notionTokens.js";
 
 function dueToDate(dueIso: string, timeZone: string): Date {
   if (dueIso.includes("T")) return new Date(dueIso);
@@ -120,16 +116,9 @@ async function processTaskPage(
 }
 
 export async function runReminderTick(discord: Client): Promise<void> {
-  let bootstrap: NotionClient;
-  try {
-    bootstrap = createBootstrapClient();
-  } catch {
-    return;
-  }
-
   let rows: BotSettingsParsed[] = [];
   try {
-    rows = await listAllBotSettings(bootstrap);
+    rows = await listGuildSettingsForReminders();
   } catch {
     return;
   }
@@ -137,7 +126,11 @@ export async function runReminderTick(discord: Client): Promise<void> {
   for (const settings of rows) {
     if (!settings.reminderChannelId) continue;
     try {
-      const token = resolveIntegrationToken(settings);
+      const token = tryResolveIntegrationToken(settings);
+      if (!token) {
+        console.warn(`[reminder] skip guild ${settings.guildId}: Notion token unavailable`);
+        continue;
+      }
       const repo = createNotionRepository(
         token,
         settings.tasksDatabaseId,

@@ -5,15 +5,13 @@ import {
 
 export const commandDefinitions = [
   new SlashCommandBuilder()
+    .setName("help-todo")
+    .setDescription("使い方・主要コマンド一覧を表示"),
+
+  new SlashCommandBuilder()
     .setName("setup-notion")
-    .setDescription("Notion を4データベースで接続（管理者）")
+    .setDescription("Notion Tasks / Projects / AI Keys を接続（管理者・ギルド設定は Supabase）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((o) =>
-      o
-        .setName("api_key")
-        .setDescription("省略時は環境変数 NOTION_TOKEN を使用")
-        .setRequired(false)
-    )
     .addStringOption((o) =>
       o.setName("tasks_database_id").setDescription("Tasks DB の ID").setRequired(true)
     )
@@ -21,13 +19,13 @@ export const commandDefinitions = [
       o.setName("projects_database_id").setDescription("Projects DB の ID").setRequired(true)
     )
     .addStringOption((o) =>
-      o
-        .setName("bot_settings_database_id")
-        .setDescription("Bot Settings DB の ID（NOTION_BOT_SETTINGS_DATABASE_ID と一致）")
-        .setRequired(true)
+      o.setName("ai_keys_database_id").setDescription("AI Keys DB の ID").setRequired(true)
     )
     .addStringOption((o) =>
-      o.setName("ai_keys_database_id").setDescription("AI Keys DB の ID").setRequired(true)
+      o
+        .setName("api_key")
+        .setDescription("省略時は環境変数 NOTION_TOKEN を使用")
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()

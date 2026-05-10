@@ -3,9 +3,9 @@ import {
   PermissionFlagsBits,
   type GuildMember,
 } from "discord.js";
-import { loadGuildContext } from "./runtime/guildContext.js";
+import { findGuildSettingsByDiscordId } from "./db/guildSettingsRepository.js";
 
-/** 管理者: Discord 管理者 または Bot Settings の管理ロール */
+/** 管理者: Discord 管理者 または Bot Settings の管理ロール（Notion トークン不要） */
 export async function isGuildAdmin(interaction: ChatInputCommandInteraction): Promise<boolean> {
   const perms = interaction.memberPermissions;
   if (perms?.has(PermissionFlagsBits.Administrator)) return true;
@@ -13,8 +13,8 @@ export async function isGuildAdmin(interaction: ChatInputCommandInteraction): Pr
   const guildId = interaction.guildId;
   if (!guildId) return false;
 
-  const ctx = await loadGuildContext(guildId);
-  const roleId = ctx?.settings.adminRoleId;
+  const settings = await findGuildSettingsByDiscordId(guildId);
+  const roleId = settings?.adminRoleId;
   if (!roleId) return false;
 
   const member = interaction.member;
