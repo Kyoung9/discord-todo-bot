@@ -8,6 +8,7 @@ import {
 import cron from "node-cron";
 import { handleChatInputCommand } from "./commandHandler.js";
 import { handleTodoConfirmButton } from "./buttonHandler.js";
+import { handleTodoConfirmModal } from "./todoConfirmModalHandler.js";
 import { runReminderTick } from "./services/reminderScheduler.js";
 
 if (!process.env.NOTION_TOKEN?.trim()) {
@@ -40,6 +41,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isButton()) {
       const handled = await handleTodoConfirmButton(interaction);
+      if (handled) return;
+    }
+    if (interaction.isModalSubmit()) {
+      const handled = await handleTodoConfirmModal(interaction);
       if (handled) return;
     }
   } catch (e) {

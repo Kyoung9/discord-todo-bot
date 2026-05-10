@@ -76,7 +76,10 @@ export async function callLlmExtract(params: {
     let model = "";
 
     if (provider === "openai") {
-      model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+      model =
+        params.key.llmModel?.trim() ||
+        process.env.OPENAI_MODEL ||
+        "gpt-4o-mini";
       const openai = new OpenAI({ apiKey: params.key.apiKeyPlain });
       const resp = await openai.chat.completions.create({
         model,
@@ -91,7 +94,10 @@ export async function callLlmExtract(params: {
       outputTokens = resp.usage?.completion_tokens ?? 0;
       totalTokens = resp.usage?.total_tokens ?? inputTokens + outputTokens;
     } else if (provider === "google") {
-      model = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+      model =
+        params.key.llmModel?.trim() ||
+        process.env.GEMINI_MODEL ||
+        "gemini-2.0-flash";
       const genAI = new GoogleGenerativeAI(params.key.apiKeyPlain);
       const mdl = genAI.getGenerativeModel({
         model,
@@ -107,7 +113,10 @@ export async function callLlmExtract(params: {
       outputTokens = metaUsage?.candidatesTokenCount ?? 0;
       totalTokens = metaUsage?.totalTokenCount ?? inputTokens + outputTokens;
     } else if (provider === "anthropic") {
-      model = process.env.ANTHROPIC_MODEL ?? "claude-3-5-haiku-20241022";
+      model =
+        params.key.llmModel?.trim() ||
+        process.env.ANTHROPIC_MODEL ||
+        "claude-3-5-haiku-20241022";
       const anthropic = new Anthropic({ apiKey: params.key.apiKeyPlain });
       const msg = await anthropic.messages.create({
         model,

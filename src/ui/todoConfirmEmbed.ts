@@ -14,9 +14,14 @@ export function buildTodoConfirmEmbed(
   }
   let n = 1;
   for (const it of payload.items) {
+    const assigneeBits =
+      it.assigneeName || it.assigneeDiscordId
+        ? `\n   担当: ${it.assigneeMention ?? it.assigneeName ?? it.assigneeDiscordId ?? ""}`
+        : "";
     lines.push(
       `${n}. ${it.title} — ${it.taskLevel} / ${it.priority}` +
-        (it.dueDateIso ? `\n   期限: ${it.dueDateIso}` : "")
+        (it.dueDateIso ? `\n   期限: ${it.dueDateIso}` : "") +
+        assigneeBits
     );
     n += 1;
   }
@@ -41,6 +46,10 @@ export function confirmButtonRow(shortId: string) {
       .setCustomId(`td:${shortId}:y`)
       .setLabel("登録する")
       .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`td:${shortId}:e`)
+      .setLabel("修正")
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`td:${shortId}:n`)
       .setLabel("キャンセル")

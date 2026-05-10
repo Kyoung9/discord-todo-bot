@@ -6,6 +6,8 @@ export type BotSettingsParsed = {
   tasksDatabaseId: string;
   projectsDatabaseId: string;
   aiKeysDatabaseId: string;
+  /** Notion メンバー映射 DB（未設定時は null） */
+  memberMapDatabaseId: string | null;
   /** 復号済み Notion Integration Secret（行に無ければ null） */
   notionApiKeyOverride: string | null;
   aiEnabled: boolean;

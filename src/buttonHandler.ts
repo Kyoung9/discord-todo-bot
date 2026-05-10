@@ -8,6 +8,7 @@ import type { ConfirmTodoPayload } from "./types/confirmPayload.js";
 import { loadGuildContext } from "./runtime/guildContext.js";
 import { ja } from "./i18n/ja.js";
 import { formatCaughtError } from "./lib/formatCaughtError.js";
+import { buildTodoEditModal } from "./ui/todoConfirmModal.js";
 
 export async function handleTodoConfirmButton(
   interaction: ButtonInteraction
@@ -16,7 +17,7 @@ export async function handleTodoConfirmButton(
   const parts = interaction.customId.split(":");
   if (parts.length !== 3) return false;
   const [, shortId, action] = parts;
-  if (action !== "y" && action !== "n") return false;
+  if (action !== "y" && action !== "n" && action !== "e") return false;
 
   const row = await getPendingPayload<ConfirmTodoPayload>(
     shortId,
@@ -37,6 +38,11 @@ export async function handleTodoConfirmButton(
       embeds: [],
       components: [],
     });
+    return true;
+  }
+
+  if (action === "e") {
+    await interaction.showModal(buildTodoEditModal(shortId, row.payload));
     return true;
   }
 

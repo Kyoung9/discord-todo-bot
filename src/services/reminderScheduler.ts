@@ -1,3 +1,4 @@
+import { Client as NotionClient } from "@notionhq/client";
 import type { Client, TextChannel } from "discord.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { TASK_PROPS } from "../config/notionSchema.js";
@@ -5,6 +6,10 @@ import { listGuildSettingsForReminders } from "../db/guildSettingsRepository.js"
 import type { BotSettingsParsed } from "../types/guildSettings.js";
 import { createNotionRepository, type NotionRepository } from "../notion/notionRepository.js";
 import { tryResolveIntegrationToken } from "../notion/notionTokens.js";
+import {
+  resolveDiscordIdByAlias,
+  resolveDiscordIdsFromNameList,
+} from "../notion/memberMapRepository.js";
 
 function dueToDate(dueIso: string, timeZone: string): Date {
   if (dueIso.includes("T")) return new Date(dueIso);
@@ -37,11 +42,49 @@ async function send(channel: TextChannel, content: string): Promise<void> {
   await channel.send({ content: content.slice(0, 2000) });
 }
 
+async function assigneeMentionLead(
+  notionClient: NotionClient,
+  settings: BotSettingsParsed,
+  guildId: string,
+  page: PageObjectResponse,
+  repo: NotionRepository
+): Promise<string> {
+  const a = repo.readAssigneeForReminder(page);
+  const mention = a.assigneeMention?.trim();
+  if (mention) return `${mention}\n\n`;
+
+  const rawIds = a.assigneeDiscordId?.trim();
+  if (rawIds) {
+    const numeric = rawIds
+      .split(",")
+      .map((x) => x.trim())
+      .map((x) => x.replace(/\D/g, ""))
+      .filter(Boolean);
+    if (numeric.length) {
+      return `${numeric.map((id) => `<@${id}>`).join(" ")}\n\n`;
+    }
+  }
+
+  const name = a.assigneeName?.trim();
+  const mapId = settings.memberMapDatabaseId;
+  if (name && mapId) {
+    if (name.includes(",")) {
+      const ids = await resolveDiscordIdsFromNameList(notionClient, mapId, guildId, name);
+      if (ids.length) return `${ids.map((id) => `<@${id}>`).join(" ")}\n\n`;
+    } else {
+      const id = await resolveDiscordIdByAlias(notionClient, mapId, guildId, name);
+      if (id) return `<@${id}>\n\n`;
+    }
+  }
+  return "";
+}
+
 async function processTaskPage(
   discord: Client,
+  notionClient: NotionClient,
   repo: NotionRepository,
   settings: BotSettingsParsed,
-  _guildId: string,
+  guildId: string,
   pageId: string
 ): Promise<void> {
   const channelId = settings.reminderChannelId;
@@ -72,9 +115,10 @@ async function processTaskPage(
           }).format(sd);
     if (!st.startNotified && startYmd === today) {
       const title = readTaskTitle(page);
+      const lead = await assigneeMentionLead(notionClient, settings, guildId, page, repo);
       await send(
         channel,
-        `📌 今日開始のタスクです。\n\n# ${title}\n期限: ${st.dueDate ?? "未設定"}`
+        `${lead}📌 今日開始のタスクです。\n\n# ${title}\n期限: ${st.dueDate ?? "未設定"}`
       );
       await repo.updateReminderFlags(pageId, { startNotified: true });
     }
@@ -86,7 +130,8 @@ async function processTaskPage(
 
   if (!st.overdueNotified && ms < 0) {
     const title = readTaskTitle(page);
-    await send(channel, `⚠️ 期限を過ぎたタスクです。\n\n# ${title}\n期限: ${st.dueDate}`);
+    const lead = await assigneeMentionLead(notionClient, settings, guildId, page, repo);
+    await send(channel, `${lead}⚠️ 期限を過ぎたタスクです。\n\n# ${title}\n期限: ${st.dueDate}`);
     await repo.updateReminderFlags(pageId, { overdueNotified: true });
     return;
   }
@@ -94,7 +139,8 @@ async function processTaskPage(
   const h1 = 60 * 60 * 1000;
   if (!st.reminded1h && ms > 0 && ms <= h1) {
     const title = readTaskTitle(page);
-    await send(channel, `⏰ 期限1時間前です。\n\n# ${title}\n期限: ${st.dueDate}`);
+    const lead = await assigneeMentionLead(notionClient, settings, guildId, page, repo);
+    await send(channel, `${lead}⏰ 期限1時間前です。\n\n# ${title}\n期限: ${st.dueDate}`);
     await repo.updateReminderFlags(pageId, { reminded1h: true });
     return;
   }
@@ -102,7 +148,8 @@ async function processTaskPage(
   const h3 = 3 * h1;
   if (!st.reminded3h && ms > h1 && ms <= h3) {
     const title = readTaskTitle(page);
-    await send(channel, `⏰ 期限3時間前です。\n\n# ${title}\n期限: ${st.dueDate}`);
+    const lead = await assigneeMentionLead(notionClient, settings, guildId, page, repo);
+    await send(channel, `${lead}⏰ 期限3時間前です。\n\n# ${title}\n期限: ${st.dueDate}`);
     await repo.updateReminderFlags(pageId, { reminded3h: true });
     return;
   }
@@ -110,7 +157,8 @@ async function processTaskPage(
   const h24 = 24 * h1;
   if (!st.reminded24h && ms > h3 && ms <= h24) {
     const title = readTaskTitle(page);
-    await send(channel, `⏰ 期限24時間前です。\n\n# ${title}\n期限: ${st.dueDate}`);
+    const lead = await assigneeMentionLead(notionClient, settings, guildId, page, repo);
+    await send(channel, `${lead}⏰ 期限24時間前です。\n\n# ${title}\n期限: ${st.dueDate}`);
     await repo.updateReminderFlags(pageId, { reminded24h: true });
   }
 }
@@ -131,6 +179,7 @@ export async function runReminderTick(discord: Client): Promise<void> {
         console.warn(`[reminder] skip guild ${settings.guildId}: Notion token unavailable`);
         continue;
       }
+      const notionClient = new NotionClient({ auth: token });
       const repo = createNotionRepository(
         token,
         settings.tasksDatabaseId,
@@ -139,7 +188,7 @@ export async function runReminderTick(discord: Client): Promise<void> {
       const notionRows = await repo.queryTasksForReminders(settings.guildId);
       for (const r of notionRows) {
         if (!r.startDate && !r.dueDate) continue;
-        await processTaskPage(discord, repo, settings, settings.guildId, r.pageId);
+        await processTaskPage(discord, notionClient, repo, settings, settings.guildId, r.pageId);
       }
     } catch {
       // ギルド単位の失敗は無視

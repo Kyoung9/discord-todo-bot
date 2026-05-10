@@ -60,3 +60,17 @@ export async function getPendingPayload<T>(
 export async function deletePending(shortId: string): Promise<void> {
   store.delete(shortId);
 }
+
+/** 確認内容をモーダル送信後に更新 */
+export async function updatePendingPayload<T>(
+  shortId: string,
+  expectedUserId: string,
+  payload: T
+): Promise<boolean> {
+  prune();
+  const row = store.get(shortId);
+  if (!row || row.expiresAt < Date.now()) return false;
+  if (row.userId !== expectedUserId) return false;
+  row.payload = JSON.stringify(payload);
+  return true;
+}

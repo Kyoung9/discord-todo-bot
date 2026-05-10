@@ -311,6 +311,19 @@ export class NotionRepository {
     };
   }
 
+  /** リマインダー通知のメンション用（担当プロパティ） */
+  readAssigneeForReminder(page: PageObjectResponse): {
+    assigneeName: string | null;
+    assigneeDiscordId: string | null;
+    assigneeMention: string | null;
+  } {
+    return {
+      assigneeName: readRichText(page, TASK_PROPS.assigneeName),
+      assigneeDiscordId: readRichText(page, TASK_PROPS.assigneeDiscordId),
+      assigneeMention: readRichText(page, TASK_PROPS.assigneeMention),
+    };
+  }
+
   /** リマインダー用: ページの生プロパティ読み取り */
   readReminderState(page: PageObjectResponse): {
     startDate: string | null;

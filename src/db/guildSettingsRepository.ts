@@ -10,6 +10,7 @@ type GuildSettingsRow = {
   notion_tasks_database_id: string;
   notion_projects_database_id: string;
   notion_ai_keys_database_id: string;
+  notion_member_map_database_id: string | null;
   notion_api_key_encrypted: string | null;
   ai_enabled: boolean;
   timezone: string;
@@ -36,6 +37,9 @@ function rowToParsed(row: GuildSettingsRow): BotSettingsParsed {
     tasksDatabaseId: normalizeNotionDatabaseId(row.notion_tasks_database_id),
     projectsDatabaseId: normalizeNotionDatabaseId(row.notion_projects_database_id),
     aiKeysDatabaseId: normalizeNotionDatabaseId(row.notion_ai_keys_database_id),
+    memberMapDatabaseId: row.notion_member_map_database_id?.trim()
+      ? normalizeNotionDatabaseId(row.notion_member_map_database_id)
+      : null,
     notionApiKeyOverride,
     aiEnabled: row.ai_enabled,
     timezone: row.timezone || "Asia/Tokyo",
@@ -67,6 +71,8 @@ export async function upsertGuildSettings(params: {
   tasksDatabaseId: string;
   projectsDatabaseId: string;
   aiKeysDatabaseId: string;
+  /** 任意。undefined なら既存行の値を維持（更新時） */
+  memberMapDatabaseId?: string | null;
   /** /setup-notion の api_key オプション。null なら暗号化列は空（NOTION_TOKEN を使用） */
   notionApiKeyPlain: string | null;
   createdBy: string;
@@ -78,11 +84,20 @@ export async function upsertGuildSettings(params: {
       ? encryptGuildSecret(params.notionApiKeyPlain.trim())
       : null;
 
+  const existing = await findGuildSettingsByDiscordId(params.guildId);
+  const mapId =
+    params.memberMapDatabaseId === undefined
+      ? existing?.memberMapDatabaseId ?? null
+      : params.memberMapDatabaseId
+        ? normalizeNotionDatabaseId(params.memberMapDatabaseId)
+        : null;
+
   const baseRow = {
     guild_name: params.guildName,
     notion_tasks_database_id: normalizeNotionDatabaseId(params.tasksDatabaseId),
     notion_projects_database_id: normalizeNotionDatabaseId(params.projectsDatabaseId),
     notion_ai_keys_database_id: normalizeNotionDatabaseId(params.aiKeysDatabaseId),
+    notion_member_map_database_id: mapId,
     notion_api_key_encrypted: enc,
     ai_enabled: false,
     timezone: "Asia/Tokyo",
@@ -93,7 +108,6 @@ export async function upsertGuildSettings(params: {
     updated_at: now,
   };
 
-  const existing = await findGuildSettingsByDiscordId(params.guildId);
   if (existing) {
     const { error } = await supabase
       .from("guild_settings")
@@ -129,6 +143,7 @@ export async function patchGuildSettings(
     tasksDatabaseId: string;
     projectsDatabaseId: string;
     aiKeysDatabaseId: string;
+    memberMapDatabaseId: string | null;
   }>
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
@@ -162,6 +177,12 @@ export async function patchGuildSettings(
   }
   if (patch.aiKeysDatabaseId !== undefined) {
     row.notion_ai_keys_database_id = normalizeNotionDatabaseId(patch.aiKeysDatabaseId);
+  }
+  if (patch.memberMapDatabaseId !== undefined) {
+    row.notion_member_map_database_id =
+      patch.memberMapDatabaseId && patch.memberMapDatabaseId.trim()
+        ? normalizeNotionDatabaseId(patch.memberMapDatabaseId)
+        : null;
   }
   const { error } = await supabase.from("guild_settings").update(row).eq("discord_guild_id", guildId);
   if (error) throw error;

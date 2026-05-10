@@ -11,6 +11,12 @@
 - **Notion インテグレーション**（Secret / `NOTION_TOKEN` またはギルドごとの API キー）
 - **Supabase プロジェクト**（`guild_settings` 用。マイグレーションは `supabase/migrations/`）
 
+### ホストが違う・公開したボットを複数サーバーが使う場合（Notion）
+
+- **各 Discord サーバー（チーム）**は、原則として **自分たちの Notion ワークスペース**でインテグレーションを作り、Tasks / Projects / AI Keys（など）に接続します。
+- サーバー管理者は `/setup-notion` の **`api_key`** に、そのサーバー用の **Integration Secret** を入れます（Supabase に暗号化保存）。こうすると **ホストの `.env` `NOTION_TOKEN` なし**でも、そのサーバーだけ独立して動けます。
+- 逆に、**ホストの `NOTION_TOKEN` を全サーバー共通で使う**と、Notion 上は「ホストが共有した 1 本のインテグレーション」前提になります。**他チームのデータと混ざらない**運用では、`NOTION_TOKEN` は空にして利用者に `api_key` 設定を必須にするのが安全です。
+
 ---
 
 ## 1. Notion 側の準備
@@ -19,17 +25,24 @@
 2. 次の **3 つのデータベース**を用意し、それぞれにインテグレーションを**接続（共有）**する。
    - **Tasks**
    - **Projects**
-   - **AI Keys**（プロパティ名はコードのスキーマと一致させる。詳細は `src/config/notionSchema.ts`）
-3. 各データベースの URL から **Database ID**（32 文字の UUID）を取得する。
+   - **AI Keys**（プロパティ名はコードのスキーマと一致。キーごとに LLM モデルを変えたい場合は **任意** で **Model**（rich_text）列を追加し、`/setup-ai-key add` の `model` または `model` サブコマンドで設定）
+3. （任意）**メンバー映射**用の第 4 データベースを作り、同じインテグレーションを接続する。  
+   AI やリマインダーで「名前だけ」の担当を Discord User ID / メンションに直すときに使います。  
+   必須プロパティは `src/config/notionSchema.ts` の `MEMBER_MAP_PROPS` と一致させてください。
+   - **Name**（Title）… 表示名
+   - **Discord User ID**（rich_text）… 数値のユーザー ID
+   - **Discord Guild ID**（rich_text）… その行を使う Discord サーバー ID（ボットはクエリ時に現在のギルドと一致する行だけを読みます）
+   - **Aliases**（rich_text・任意）… `別名1,別名2` のようにカンマ区切り
+4. 各データベースの URL から **Database ID**（32 文字の UUID）を取得する。
 
-`/setup-notion` 実行時に、Tasks / Projects / AI Keys の ID を渡します。
+`/setup-notion` 実行時に、Tasks / Projects / AI Keys の ID を渡します。任意で `member_map_database_id` に映射 DB の ID を渡せます（省略した場合は映射なしで動作し、再実行で省略すると既存の映射 ID はそのまま維持されます）。
 
 ---
 
 ## 2. Supabase の準備
 
 1. Supabase でプロジェクトを作成する。
-2. SQL エディタまたは CLI で、`supabase/migrations/` 内のマイグレーションを適用する（少なくとも `guild_settings` テーブルが作成されること）。
+2. SQL エディタまたは CLI で、`supabase/migrations/` 内のマイグレーションを適用する（`guild_settings` の作成に加え、映射用の `notion_member_map_database_id` 列を含む最新まで適用すること）。
 3. **Project Settings → API** から `URL` と **`service_role`** キーを取得する。  
    ボットはサーバー側で RLS をバイパスするため **`service_role`** を使用します（クライアントに埋め込まないこと）。
 
@@ -102,9 +115,19 @@ npm start
 ## 8. 初回セットアップ（サーバー管理者）
 
 1. ボットをサーバーに招待したうえで、**管理者**が次を実行します。
-   - `/setup-notion` … `tasks_database_id`, `projects_database_id`, `ai_keys_database_id` を指定。`api_key` は省略可（その場合 `NOTION_TOKEN` を使用）。
+   - `/setup-notion` … `tasks_database_id`, `projects_database_id`, `ai_keys_database_id` を指定。`member_map_database_id` は任意。`api_key` は省略可（その場合 `NOTION_TOKEN` を使用）。
    - 必要に応じて `/setup-timezone`, `/setup-channel`, `/setup-role`, `/settings`。
-2. AI を使う場合は `/setup-ai-key` で Notion **AI Keys** DB に行が追加されます（キーは一覧に平文は出しません）。
+2. AI を使う場合は `/setup-ai-key` で Notion **AI Keys** DB に行が追加されます（キーは一覧に平文は出しません）。モデルはキー行の **Model** 列またはホストの環境変数（`OPENAI_MODEL` 等）の順で決まります。
+
+### 複数担当者（Tasks DB のプロパティ 3 つ）
+
+追加の Notion 列は使わず、次の**書き方の約束**で複数人を保存します。
+
+- **Assignee Discord ID** … `123456789,987654321`（カンマ区切り・空白はトリム）
+- **Assignee Mention** … `<@123456789> <@987654321>`（スペース区切り）
+- **Assignee Name** … `Aさん, Bさん` など表示用（カンマ区切り）
+
+手動 `/todo` の本文に複数のユーザーメンション（`<@…>`）がある場合、ボットが上記形式で Notion に書き込みます。`/todo-list` の「自分」フィルタは、カンマ区切り ID のいずれかが自分なら表示されます。
 
 ---
 
@@ -122,14 +145,15 @@ npm start
 
 | コマンド | 説明 |
 |----------|------|
-| `/setup-notion` | Tasks / Projects / AI Keys DB を接続（必須オプション 3 つ） |
+| `/setup-notion` | Tasks / Projects / AI Keys DB を接続（必須 3 つ + 任意 `member_map_database_id`） |
 | `/setup-timezone` | タイムゾーン |
 | `/setup-channel` | リマインダー通知チャンネル |
 | `/setup-role` | 管理者ロール |
 | `/settings` | サーバー設定の概要 |
+| `/member-map` | メンバー映射: `add`（`user`・任意 `display_name`・カンマ区切り `aliases`）/ `list` / `edit`（`clear_aliases` で別名クリア）/ `remove`（要 `member_map_database_id`） |
 | `/disconnect-notion` | Notion 連携解除 |
 | `/delete-server-settings` | サーバー設定削除（Supabase） |
-| `/setup-ai-key` | `add` / `list` / `test` / `disable` / `remove` / `priority` |
+| `/setup-ai-key` | `add`（任意 `model`）/ `list` / `test` / `disable` / `remove` / `priority` / `model` |
 | `/usage` | `today` / `month` / `keys`（AI 使用量） |
 
 ### プロジェクト・イベント
@@ -138,8 +162,7 @@ npm start
 |----------|------|
 | `/project-create` | プロジェクト作成 |
 | `/event-create` | イベント作成 |
-| `/project-list` | 一覧 |
-| `/project-tasks` | プロジェクト別 Todo |
+| `/project-list` | 一覧（Projects DB 上の Project / Event など） |
 | `/project-edit` | 編集（管理者） |
 | `/project-delete` | 削除・アーカイブ（管理者） |
 
@@ -148,7 +171,7 @@ npm start
 | コマンド | 説明 |
 |----------|------|
 | `/todo` | Todo 登録（`text`、任意で `project`） |
-| `/todo-list` | 一覧（任意 `filter`: 自分 / 今日 / 期限超過 / 進行中） |
+| `/todo-list` | 一覧（任意 `filter`・任意 `project` でプロジェクト名／イベント名に紐づく Todo のみ） |
 | `/todo-edit` | 編集（`/todo-list` の番号 `id`） |
 | `/todo-done` | 完了 |
 | `/todo-delete` | 削除／キャンセル（`hard` で管理者アーカイブ） |
@@ -173,9 +196,9 @@ npm start
 
 ### Notion が「接続できない」「プロパティがない」
 
-- 3 つの DB すべてにインテグレーションが共有されているか。  
+- 使う DB すべて（Tasks / Projects / AI Keys、および映射を使う場合は **Member Map**）にインテグレーションが共有されているか。  
 - DB ID が正しいか（空白を含めない）。  
-- プロパティ名が `src/config/notionSchema.ts` の定義と一致しているか。
+- プロパティ名が `src/config/notionSchema.ts` の定義と一致しているか（映射は `MEMBER_MAP_PROPS`）。
 
 ### `Invalid path specified in request URL`（Notion）
 

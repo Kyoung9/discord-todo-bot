@@ -12,12 +12,18 @@ export function buildHelpEmbed(): EmbedBuilder {
     )
     .addFields(
       {
+        name: "ドキュメント",
+        value: "`/notion-api` — Notion API 公式 changelog へのリンクと、このボットの利用 API 概要",
+        inline: false,
+      },
+      {
         name: "設定（管理者）",
         value: [
           "`/setup-notion` — Notion 3 DB 接続",
           "`/setup-timezone` `/setup-channel` `/setup-role`",
           "`/settings` `/disconnect-notion` `/delete-server-settings`",
-          "`/setup-ai-key` — add / list / test / …",
+          "`/member-map` — add / list / edit / remove（要 member_map DB）",
+          "`/setup-ai-key` — add（任意 model）/ list / test / model / …",
           "`/usage` — today / month / keys",
         ].join("\n"),
         inline: false,
@@ -26,7 +32,7 @@ export function buildHelpEmbed(): EmbedBuilder {
         name: "プロジェクト・イベント",
         value: [
           "`/project-create` `/event-create` `/project-list`",
-          "`/project-tasks` `/project-edit` `/project-delete`",
+          "`/project-edit` `/project-delete`（`/event-create` は Projects DB に Event 行を作成）",
         ].join("\n"),
         inline: false,
       },
@@ -34,7 +40,7 @@ export function buildHelpEmbed(): EmbedBuilder {
         name: "Todo",
         value: [
           "`/todo` — 登録（`text`、任意 `project`）",
-          "`/todo-list` — 一覧（フィルタ任意）",
+          "`/todo-list` — 一覧（`filter` / 任意 `project` でプロジェクト・イベント別）",
           "`/todo-edit` `/todo-done` `/todo-delete`",
           "`/subtask-add` — 親番号にサブタスク",
         ].join("\n"),

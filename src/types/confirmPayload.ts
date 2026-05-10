@@ -9,6 +9,10 @@ export type ConfirmTodoItem = {
   priority: "High" | "Medium" | "Low";
   startDateIso?: string | null;
   dueDateIso?: string | null;
+  /** Notion Assignee Name / Discord ID / メンション文字列 */
+  assigneeName?: string | null;
+  assigneeDiscordId?: string | null;
+  assigneeMention?: string | null;
 };
 
 export type ConfirmProjectSpec = {

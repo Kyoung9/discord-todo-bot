@@ -1,5 +1,5 @@
 import { Client } from "@notionhq/client";
-import { AI_KEYS_PROPS, PROJECT_PROPS, TASK_PROPS } from "../config/notionSchema.js";
+import { AI_KEYS_PROPS, MEMBER_MAP_PROPS, PROJECT_PROPS, TASK_PROPS } from "../config/notionSchema.js";
 import {
   isValidNotionDatabaseId,
   normalizeNotionDatabaseId,
@@ -117,7 +117,49 @@ export async function validateNotionSetup(
   }
 }
 
+function validateMemberMapProps(props: Record<string, string>): string | null {
+  const checks: (string | null)[] = [
+    requireType(props, MEMBER_MAP_PROPS.name, "title"),
+    requireType(props, MEMBER_MAP_PROPS.discordUserId, "rich_text"),
+    requireType(props, MEMBER_MAP_PROPS.discordGuildId, "rich_text"),
+  ];
+  const aliasesTy = props[MEMBER_MAP_PROPS.aliases];
+  if (aliasesTy !== undefined && aliasesTy !== "rich_text") {
+    return `プロパティ ${MEMBER_MAP_PROPS.aliases} の型が不正です（期待: rich_text, 実際: ${aliasesTy}）`;
+  }
+  return checks.find(Boolean) ?? null;
+}
+
+/** メンバー映射 DB のスキーマ検証（Integration が DB に接続済みであること） */
+export async function validateMemberMapDatabase(
+  notionToken: string,
+  memberMapDbId: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const client = new Client({ auth: notionToken });
+  const id = normalizeNotionDatabaseId(memberMapDbId);
+  if (!isValidNotionDatabaseId(id)) {
+    return {
+      ok: false,
+      message:
+        "Member Map Database ID の形式が不正です。32 桁の ID、または Notion の DB ページ URLを入力してください。",
+    };
+  }
+  try {
+    const db = await client.databases.retrieve({ database_id: id });
+    const err = validateMemberMapProps(getPropTypes(db));
+    if (err) return { ok: false, message: err };
+    return { ok: true };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, message: `Notion API エラー: ${msg}` };
+  }
+}
+
 function validateAiKeysProps(props: Record<string, string>): string | null {
+  const modelTy = props[AI_KEYS_PROPS.model];
+  if (modelTy !== undefined && modelTy !== "rich_text") {
+    return `プロパティ ${AI_KEYS_PROPS.model} の型が不正です（期待: rich_text, 実際: ${modelTy}）`;
+  }
   const checks: (string | null)[] = [
     requireType(props, AI_KEYS_PROPS.name, "title"),
     requireType(props, AI_KEYS_PROPS.discordGuildId, "rich_text"),
@@ -142,12 +184,13 @@ function validateAiKeysProps(props: Record<string, string>): string | null {
   return checks.find(Boolean) ?? null;
 }
 
-/** Tasks / Projects / AI Keys の 3 DB 検証（ギルド設定は Supabase） */
+/** Tasks / Projects / AI Keys の 3 DB 検証（ギルド設定は Supabase）。任意でメンバー映射 DB も検証 */
 export async function validateThreeDbSetup(params: {
   notionToken: string;
   tasksDbId: string;
   projectsDbId: string;
   aiKeysDbId: string;
+  memberMapDatabaseId?: string | null;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const base = await validateNotionSetup(
     params.notionToken,
@@ -170,6 +213,13 @@ export async function validateThreeDbSetup(params: {
     const ak = await client.databases.retrieve({ database_id: akId });
     const akErr = validateAiKeysProps(getPropTypes(ak));
     if (akErr) return { ok: false, message: akErr };
+
+    const mapRaw = params.memberMapDatabaseId?.trim();
+    if (mapRaw) {
+      const mapCheck = await validateMemberMapDatabase(params.notionToken, mapRaw);
+      if (!mapCheck.ok) return mapCheck;
+    }
+
     return { ok: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

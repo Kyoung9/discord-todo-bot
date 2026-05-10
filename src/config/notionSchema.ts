@@ -65,12 +65,22 @@ export const BOT_SETTINGS_PROPS = {
   updatedAt: "Updated At",
 } as const;
 
+/** Discord メンバー → User ID 映射（任意 DB） */
+export const MEMBER_MAP_PROPS = {
+  name: "Name",
+  discordUserId: "Discord User ID",
+  discordGuildId: "Discord Guild ID",
+  aliases: "Aliases",
+} as const;
+
 /** AI Keys DB */
 export const AI_KEYS_PROPS = {
   name: "Name",
   discordGuildId: "Discord Guild ID",
   provider: "Provider",
   apiKey: "API Key",
+  /** 任意 rich_text — プロバイダごとのモデル ID（未設定時は環境変数・コードデフォルト） */
+  model: "Model",
   priority: "Priority",
   status: "Status",
   failureCount: "Failure Count",

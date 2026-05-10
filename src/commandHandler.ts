@@ -17,6 +17,7 @@ import {
   createAiKeyPage,
   deleteAiKeyPage,
   findAiKeyByName,
+  updateAiKeyLlmModel,
   listAiKeysForGuild,
   pickNextAiKey,
   updateAiKeyPriority,
@@ -36,6 +37,7 @@ import {
 import { createPendingPayload } from "./services/pendingInteractionService.js";
 import { buildTodoConfirmEmbed, confirmButtonRow } from "./ui/todoConfirmEmbed.js";
 import { buildHelpEmbed } from "./ui/helpEmbed.js";
+import { buildNotionApiInfoEmbed } from "./ui/notionApiInfoEmbed.js";
 import {
   saveOrderedTaskIds,
   resolveTaskPageIdByDisplayIndex,
@@ -46,6 +48,16 @@ import type { TaskRow } from "./notion/notionRepository.js";
 import { loadGuildContext, type GuildContext } from "./runtime/guildContext.js";
 import { ja } from "./i18n/ja.js";
 import { formatCaughtError } from "./lib/formatCaughtError.js";
+import { resolveTodoAssigneeForManual } from "./lib/discordAssignee.js";
+import {
+  archiveMemberMapPage,
+  createMemberMapPage,
+  findMemberMapPageIdForUser,
+  invalidateMemberMapCache,
+  listMemberMapEntries,
+  normalizeAliasesInput,
+  updateMemberMapPage,
+} from "./notion/memberMapRepository.js";
 
 function adminOnlyMessage(): string {
   return ja.adminOnly;
@@ -78,7 +90,12 @@ function filterTasks(
   if (!filter) return rows;
   const now = new Date();
   if (filter === "mine") {
-    return rows.filter((r) => r.assigneeDiscordId === userId);
+    return rows.filter((r) => {
+      const raw = r.assigneeDiscordId?.trim();
+      if (!raw) return false;
+      const ids = raw.split(",").map((x) => x.trim()).filter(Boolean);
+      return ids.includes(userId);
+    });
   }
   if (filter === "doing") {
     return rows.filter((r) => r.status === "Doing");
@@ -113,12 +130,18 @@ function filterTasks(
   return rows;
 }
 
-async function testProviderPing(provider: string, apiKey: string): Promise<void> {
+async function testProviderPing(
+  provider: string,
+  apiKey: string,
+  modelOverride?: string | null
+): Promise<void> {
   const p = provider.toLowerCase();
   if (p === "openai") {
     const o = new OpenAI({ apiKey });
+    const model =
+      modelOverride?.trim() || process.env.OPENAI_MODEL || "gpt-4o-mini";
     await o.chat.completions.create({
-      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+      model,
       messages: [{ role: "user", content: "ping" }],
       max_tokens: 5,
     });
@@ -126,14 +149,18 @@ async function testProviderPing(provider: string, apiKey: string): Promise<void>
   }
   if (p === "google") {
     const gen = new GoogleGenerativeAI(apiKey);
-    const m = gen.getGenerativeModel({ model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" });
+    const model =
+      modelOverride?.trim() || process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const m = gen.getGenerativeModel({ model });
     await m.generateContent("ping");
     return;
   }
   if (p === "anthropic") {
     const a = new Anthropic({ apiKey });
+    const model =
+      modelOverride?.trim() || process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022";
     await a.messages.create({
-      model: process.env.ANTHROPIC_MODEL ?? "claude-3-5-haiku-20241022",
+      model,
       max_tokens: 8,
       messages: [{ role: "user", content: "ping" }],
     });
@@ -148,6 +175,14 @@ export async function handleChatInputCommand(
   try {
     if (interaction.commandName === "help-todo") {
       await interaction.reply({ embeds: [buildHelpEmbed()], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.commandName === "notion-api") {
+      await interaction.reply({
+        embeds: [buildNotionApiInfoEmbed()],
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
@@ -172,11 +207,14 @@ export async function handleChatInputCommand(
         const tasksDb = interaction.options.getString("tasks_database_id", true);
         const projectsDb = interaction.options.getString("projects_database_id", true);
         const aiKeysDb = interaction.options.getString("ai_keys_database_id", true);
+        const memberMapOpt = interaction.options.getString("member_map_database_id");
+        const memberMapTrim = memberMapOpt?.trim() || null;
         const v = await validateThreeDbSetup({
           notionToken: apiKey,
           tasksDbId: tasksDb,
           projectsDbId: projectsDb,
           aiKeysDbId: aiKeysDb,
+          memberMapDatabaseId: memberMapTrim,
         });
         if (!v.ok) {
           await interaction.reply({
@@ -186,15 +224,21 @@ export async function handleChatInputCommand(
           return;
         }
         const gname = interaction.guild?.name ?? guildId;
+        const prev = await loadGuildContext(guildId);
         await upsertGuildSettings({
           guildId,
           guildName: gname,
           tasksDatabaseId: tasksDb,
           projectsDatabaseId: projectsDb,
           aiKeysDatabaseId: aiKeysDb,
+          memberMapDatabaseId: memberMapTrim === null ? undefined : memberMapTrim,
           notionApiKeyPlain: apiKeyOpt?.trim() || null,
           createdBy: interaction.user.id,
         });
+        if (prev.ok && prev.ctx.settings.memberMapDatabaseId) {
+          invalidateMemberMapCache(prev.ctx.settings.memberMapDatabaseId, guildId);
+        }
+        if (memberMapTrim) invalidateMemberMapCache(memberMapTrim, guildId);
         await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.notionSetupOk });
         return;
       }
@@ -250,6 +294,7 @@ export async function handleChatInputCommand(
           flags: MessageFlags.Ephemeral,
           content: ja.settingsSummary([
             `Notion: 接続済み`,
+            `メンバー映射 DB: ${s.memberMapDatabaseId ? "接続済み" : "未設定"}`,
             `Timezone: ${s.timezone}`,
             `通知: ${s.reminderChannelId ? `<#${s.reminderChannelId}>` : "未設定"}`,
             `管理ロール: ${s.adminRoleId ? `<@&${s.adminRoleId}>` : "未設定"}`,
@@ -311,6 +356,7 @@ export async function handleChatInputCommand(
           const keyName = interaction.options.getString("key_name", true);
           const apiKey = interaction.options.getString("api_key", true);
           const priority = interaction.options.getInteger("priority", true);
+          const llmModel = interaction.options.getString("model");
           const existing = await findAiKeyByName(
             ctx.dataClient,
             ctx.settings.aiKeysDatabaseId,
@@ -318,17 +364,27 @@ export async function handleChatInputCommand(
             keyName
           );
           if (existing) await deleteAiKeyPage(ctx.dataClient, existing.pageId);
-          await createAiKeyPage({
-            client: ctx.dataClient,
-            aiKeysDatabaseId: ctx.settings.aiKeysDatabaseId,
-            guildId,
-            keyName,
-            provider,
-            apiKey,
-            priority,
-            createdBy: interaction.user.id,
-            timezone: ctx.settings.timezone,
-          });
+          try {
+            await createAiKeyPage({
+              client: ctx.dataClient,
+              aiKeysDatabaseId: ctx.settings.aiKeysDatabaseId,
+              guildId,
+              keyName,
+              provider,
+              apiKey,
+              llmModel: llmModel?.trim() || null,
+              priority,
+              createdBy: interaction.user.id,
+              timezone: ctx.settings.timezone,
+            });
+          } catch (e: unknown) {
+            const msg = formatCaughtError(e);
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.aiKeySaveMaybeModelProp(msg.slice(0, 400)),
+            });
+            return;
+          }
           await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeySaved });
           return;
         }
@@ -340,7 +396,7 @@ export async function handleChatInputCommand(
           );
           const lines = keys.map(
             (k, i) =>
-              `${i + 1}. ${k.keyName}\n   Provider: ${k.provider}\n   Priority: ${k.priority}\n   Status: ${k.status}`
+              `${i + 1}. ${k.keyName}\n   Provider: ${k.provider}\n   Model: ${k.llmModel ?? ja.aiKeyModelDefaultLabel}\n   Priority: ${k.priority}\n   Status: ${k.status}`
           );
           await interaction.reply({
             flags: MessageFlags.Ephemeral,
@@ -397,6 +453,39 @@ export async function handleChatInputCommand(
           await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyPriorityOk });
           return;
         }
+        if (sub === "model") {
+          const keyName = interaction.options.getString("key_name", true);
+          const modelRaw = interaction.options.getString("model");
+          const row = await findAiKeyByName(
+            ctx.dataClient,
+            ctx.settings.aiKeysDatabaseId,
+            guildId,
+            keyName
+          );
+          if (!row) {
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiKeyNotFound });
+            return;
+          }
+          try {
+            await updateAiKeyLlmModel(
+              ctx.dataClient,
+              row.pageId,
+              modelRaw?.trim() ? modelRaw.trim() : null
+            );
+          } catch (e: unknown) {
+            const msg = formatCaughtError(e);
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.aiKeySaveMaybeModelProp(msg.slice(0, 400)),
+            });
+            return;
+          }
+          await interaction.reply({
+            flags: MessageFlags.Ephemeral,
+            content: modelRaw?.trim() ? ja.aiKeyModelOk(modelRaw.trim()) : ja.aiKeyModelCleared,
+          });
+          return;
+        }
         if (sub === "test") {
           const keyName = interaction.options.getString("key_name", true);
           const row = await findAiKeyByName(
@@ -410,7 +499,7 @@ export async function handleChatInputCommand(
             return;
           }
           try {
-            await testProviderPing(row.provider, row.apiKeyPlain);
+            await testProviderPing(row.provider, row.apiKeyPlain, row.llmModel);
             await interaction.reply({
               flags: MessageFlags.Ephemeral,
               content: ja.aiTestOk(String(row.provider)),
@@ -418,6 +507,166 @@ export async function handleChatInputCommand(
           } catch (e: unknown) {
             const msg = formatCaughtError(e);
             await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.aiTestFail(msg.slice(0, 300)) });
+          }
+          return;
+        }
+        return;
+      }
+
+      case "member-map": {
+        if (!(await isGuildAdmin(interaction))) {
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: adminOnlyMessage() });
+          return;
+        }
+        const ctx = await requireGuildContext(interaction);
+        if (!ctx) return;
+        const mapId = ctx.settings.memberMapDatabaseId;
+        if (!mapId) {
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.memberMapNoDb });
+          return;
+        }
+        const sub = interaction.options.getSubcommand(true);
+        if (sub === "list") {
+          try {
+            const rows = await listMemberMapEntries(ctx.dataClient, mapId, guildId);
+            if (rows.length === 0) {
+              await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.memberMapListEmpty });
+              return;
+            }
+            const body = rows
+              .map((r) =>
+                ja.memberMapListLine(
+                  r.displayName,
+                  r.discordUserId,
+                  r.aliases ?? ja.memberMapNoAliases
+                )
+              )
+              .join("\n\n")
+              .slice(0, 3500);
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: body });
+          } catch (e: unknown) {
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.error(formatCaughtError(e).slice(0, 400)),
+            });
+          }
+          return;
+        }
+        if (sub === "add") {
+          const user = interaction.options.getUser("user", true);
+          const nameOpt = interaction.options.getString("display_name")?.trim();
+          const aliasesRaw = interaction.options.getString("aliases");
+          const member = await interaction.guild?.members.fetch(user.id).catch(() => null);
+          const displayName =
+            nameOpt ||
+            member?.displayName ||
+            user.globalName ||
+            user.username;
+          const aliases = normalizeAliasesInput(aliasesRaw);
+          try {
+            const existing = await findMemberMapPageIdForUser(
+              ctx.dataClient,
+              mapId,
+              guildId,
+              user.id
+            );
+            if (existing) {
+              await interaction.reply({
+                flags: MessageFlags.Ephemeral,
+                content: ja.memberMapExists(user.id),
+              });
+              return;
+            }
+            await createMemberMapPage({
+              client: ctx.dataClient,
+              mapDatabaseId: mapId,
+              guildId,
+              discordUserId: user.id,
+              displayName,
+              aliases,
+            });
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.memberMapAdded(displayName, aliases),
+            });
+          } catch (e: unknown) {
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.error(formatCaughtError(e).slice(0, 400)),
+            });
+          }
+          return;
+        }
+        if (sub === "edit") {
+          const user = interaction.options.getUser("user", true);
+          const nameOpt = interaction.options.getString("display_name");
+          const aliasesRaw = interaction.options.getString("aliases");
+          const clearAliases = interaction.options.getBoolean("clear_aliases") === true;
+          const hasName = Boolean(nameOpt?.trim());
+          const hasAliases = Boolean(aliasesRaw?.trim());
+          if (!hasName && !hasAliases && !clearAliases) {
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.memberMapEditNothing,
+            });
+            return;
+          }
+          try {
+            const pageId = await findMemberMapPageIdForUser(
+              ctx.dataClient,
+              mapId,
+              guildId,
+              user.id
+            );
+            if (!pageId) {
+              await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.memberMapNotFound });
+              return;
+            }
+            await updateMemberMapPage({
+              client: ctx.dataClient,
+              mapDatabaseId: mapId,
+              guildId,
+              pageId,
+              displayName: hasName ? nameOpt!.trim() : undefined,
+              aliases: clearAliases ? null : hasAliases ? normalizeAliasesInput(aliasesRaw) : undefined,
+            });
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.memberMapUpdated,
+            });
+          } catch (e: unknown) {
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.error(formatCaughtError(e).slice(0, 400)),
+            });
+          }
+          return;
+        }
+        if (sub === "remove") {
+          const user = interaction.options.getUser("user", true);
+          try {
+            const pageId = await findMemberMapPageIdForUser(
+              ctx.dataClient,
+              mapId,
+              guildId,
+              user.id
+            );
+            if (!pageId) {
+              await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.memberMapNotFound });
+              return;
+            }
+            await archiveMemberMapPage({
+              client: ctx.dataClient,
+              mapDatabaseId: mapId,
+              guildId,
+              pageId,
+            });
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.memberMapRemoved });
+          } catch (e: unknown) {
+            await interaction.reply({
+              flags: MessageFlags.Ephemeral,
+              content: ja.error(formatCaughtError(e).slice(0, 400)),
+            });
           }
           return;
         }
@@ -471,27 +720,6 @@ export async function handleChatInputCommand(
         await interaction.reply({
           flags: MessageFlags.Ephemeral,
           content: body.length ? body : ja.projectListEmpty,
-        });
-        return;
-      }
-
-      case "project-tasks": {
-        const ctx = await requireGuildContext(interaction);
-        if (!ctx) return;
-        const name = interaction.options.getString("project", true);
-        const proj = await ctx.tasksRepo.queryProjectByName(guildId, name);
-        if (!proj) {
-          await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectNotFound });
-          return;
-        }
-        const tasks = await ctx.tasksRepo.queryTasksByProjectPageId(guildId, proj.pageId);
-        const by = (st: string) => tasks.filter((t) => t.status === st);
-        const fmt = (arr: TaskRow[]) => arr.map((t) => `- ${t.title}`).join("\n") || "(なし)";
-        await interaction.reply({
-          flags: MessageFlags.Ephemeral,
-          content: `**${name}**\n\nTodo\n${fmt(by("Todo"))}\n\nDoing\n${fmt(
-            by("Doing")
-          )}\n\nDone\n${fmt(by("Done"))}`.slice(0, 3500),
         });
         return;
       }
@@ -552,12 +780,14 @@ export async function handleChatInputCommand(
           projectPageId = p?.pageId ?? null;
         }
 
+        const manualResolved = await resolveTodoAssigneeForManual(interaction, text);
         let payload = buildSimpleConfirmPayload({
           guildId,
           channelId: interaction.channelId ?? "",
           userId: interaction.user.id,
-          title: text,
+          title: manualResolved.title,
           projectPageId,
+          assignee: manualResolved.assignee,
         });
 
         const budget = await assertGuildAiBudgetCtx(ctx);
@@ -607,6 +837,8 @@ export async function handleChatInputCommand(
                 sourceText: text,
                 ai: res.data,
                 repo: ctx.tasksRepo,
+                dataClient: ctx.dataClient,
+                memberMapDatabaseId: ctx.settings.memberMapDatabaseId,
               });
               gotAi = true;
               break;
@@ -624,12 +856,14 @@ export async function handleChatInputCommand(
         }
 
         if (aiFailedMessage) {
+          const again = await resolveTodoAssigneeForManual(interaction, text);
           payload = buildSimpleConfirmPayload({
             guildId,
             channelId: interaction.channelId ?? "",
             userId: interaction.user.id,
-            title: text,
+            title: again.title,
             projectPageId,
+            assignee: again.assignee,
           });
         }
 
@@ -657,12 +891,19 @@ export async function handleChatInputCommand(
         const ctx = await requireGuildContext(interaction);
         if (!ctx) return;
         const filter = interaction.options.getString("filter");
-        const rows = filterTasks(
-          await ctx.tasksRepo.queryOpenTasks(guildId),
-          filter,
-          interaction.user.id,
-          ctx.settings.timezone
-        );
+        const projectName = interaction.options.getString("project")?.trim();
+        let rows = await ctx.tasksRepo.queryOpenTasks(guildId);
+        let scopeHeader = "";
+        if (projectName) {
+          const proj = await ctx.tasksRepo.queryProjectByName(guildId, projectName);
+          if (!proj) {
+            await interaction.reply({ flags: MessageFlags.Ephemeral, content: ja.projectNotFound });
+            return;
+          }
+          rows = rows.filter((r) => r.projectIds.includes(proj.pageId));
+          scopeHeader = ja.todoListScoped(projectName);
+        }
+        rows = filterTasks(rows, filter, interaction.user.id, ctx.settings.timezone);
         const ids = rows.map((r) => r.pageId);
         await saveOrderedTaskIds(interaction.user.id, guildId, ids);
         const lines = rows.map((r, i) => {
@@ -675,8 +916,10 @@ export async function handleChatInputCommand(
         await interaction.reply({
           flags: MessageFlags.Ephemeral,
           content: lines.length
-            ? `${ja.todoListTitle}\n\n${lines.join("\n\n")}`.slice(0, 3500)
-            : ja.todoListEmpty,
+            ? `${scopeHeader}${ja.todoListTitle}\n\n${lines.join("\n\n")}`.slice(0, 3500)
+            : projectName
+              ? ja.todoListEmptyScoped(projectName)
+              : ja.todoListEmpty,
         });
         return;
       }

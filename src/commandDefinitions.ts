@@ -9,6 +9,10 @@ export const commandDefinitions = [
     .setDescription("使い方・主要コマンド一覧を表示"),
 
   new SlashCommandBuilder()
+    .setName("notion-api")
+    .setDescription("Notion API 公式の更新情報リンクと、このボットの API 利用概要"),
+
+  new SlashCommandBuilder()
     .setName("setup-notion")
     .setDescription("Notion Tasks / Projects / AI Keys を接続（管理者・ギルド設定は Supabase）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -20,6 +24,12 @@ export const commandDefinitions = [
     )
     .addStringOption((o) =>
       o.setName("ai_keys_database_id").setDescription("AI Keys DB の ID").setRequired(true)
+    )
+    .addStringOption((o) =>
+      o
+        .setName("member_map_database_id")
+        .setDescription("任意: メンバー名→Discord ID 映射 DB の ID（USAGE.md 参照）")
+        .setRequired(false)
     )
     .addStringOption((o) =>
       o
@@ -68,6 +78,63 @@ export const commandDefinitions = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
+    .setName("member-map")
+    .setDescription("Notion メンバー映射（名前・別名 ↔ Discord ID）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sc) =>
+      sc
+        .setName("add")
+        .setDescription("メンバーを追加（別名はカンマ区切りで複数可）")
+        .addUserOption((o) =>
+          o.setName("user").setDescription("Discord ユーザー").setRequired(true)
+        )
+        .addStringOption((o) =>
+          o
+            .setName("display_name")
+            .setDescription("Notion の Name（省略時はサーバー表示名）")
+            .setRequired(false)
+        )
+        .addStringOption((o) =>
+          o
+            .setName("aliases")
+            .setDescription("別名をカンマ区切り（例: 田中,タナカ,Tanaka）")
+            .setRequired(false)
+        )
+    )
+    .addSubcommand((sc) => sc.setName("list").setDescription("このサーバーの映射一覧"))
+    .addSubcommand((sc) =>
+      sc
+        .setName("edit")
+        .setDescription("表示名・別名を更新（別名はまとめて置き換え）")
+        .addUserOption((o) =>
+          o.setName("user").setDescription("対象ユーザー").setRequired(true)
+        )
+        .addStringOption((o) =>
+          o.setName("display_name").setDescription("新しい Name（省略可）").setRequired(false)
+        )
+        .addStringOption((o) =>
+          o
+            .setName("aliases")
+            .setDescription("別名をカンマ区切りで指定（既存を置換）")
+            .setRequired(false)
+        )
+        .addBooleanOption((o) =>
+          o
+            .setName("clear_aliases")
+            .setDescription("true なら別名をすべて削除")
+            .setRequired(false)
+        )
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("remove")
+        .setDescription("映射行を削除（アーカイブ）")
+        .addUserOption((o) =>
+          o.setName("user").setDescription("対象ユーザー").setRequired(true)
+        )
+    ),
+
+  new SlashCommandBuilder()
     .setName("setup-ai-key")
     .setDescription("AI API キー管理（管理者）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -92,6 +159,14 @@ export const commandDefinitions = [
         .addStringOption((o) => o.setName("api_key").setDescription("API Key").setRequired(true))
         .addIntegerOption((o) =>
           o.setName("priority").setDescription("優先度（小さいほど先）").setRequired(true)
+        )
+        .addStringOption((o) =>
+          o
+            .setName("model")
+            .setDescription(
+              "任意: LLM モデル ID（例: gpt-4o-mini）。AI Keys DB に Model 列（rich_text）が必要"
+            )
+            .setRequired(false)
         )
     )
     .addSubcommand((sc) => sc.setName("list").setDescription("キー一覧"))
@@ -129,6 +204,20 @@ export const commandDefinitions = [
         .addIntegerOption((o) =>
           o.setName("value").setDescription("新しい優先度").setRequired(true)
         )
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("model")
+        .setDescription("LLM モデル ID を設定（model 省略でホスト既定・環境変数に戻す）")
+        .addStringOption((o) =>
+          o.setName("key_name").setDescription("キー名").setRequired(true)
+        )
+        .addStringOption((o) =>
+          o
+            .setName("model")
+            .setDescription("モデル ID。省略すると行の Model をクリア")
+            .setRequired(false)
+        )
     ),
 
   new SlashCommandBuilder()
@@ -158,13 +247,6 @@ export const commandDefinitions = [
     .setDescription("プロジェクト／イベント一覧"),
 
   new SlashCommandBuilder()
-    .setName("project-tasks")
-    .setDescription("プロジェクト別の Todo")
-    .addStringOption((o) =>
-      o.setName("project").setDescription("プロジェクト名").setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
     .setName("project-edit")
     .setDescription("プロジェクトを編集（管理者）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -190,7 +272,7 @@ export const commandDefinitions = [
 
   new SlashCommandBuilder()
     .setName("todo-list")
-    .setDescription("Todo 一覧")
+    .setDescription("Todo 一覧（任意でプロジェクト／イベント名で絞り込み）")
     .addStringOption((o) =>
       o
         .setName("filter")
@@ -202,6 +284,12 @@ export const commandDefinitions = [
           { name: "期限超過", value: "overdue" },
           { name: "進行中", value: "doing" }
         )
+    )
+    .addStringOption((o) =>
+      o
+        .setName("project")
+        .setDescription("プロジェクトまたはイベント名（省略で全件ベース）")
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()

@@ -15,6 +15,11 @@ export const ja = {
   disconnectOk: "Notion 設定行をアーカイブしました。",
   deleteAllOk: "サーバー設定と AI キー行をアーカイブしました。",
   aiKeySaved: "AI API キーを保存しました。",
+  aiKeyModelDefaultLabel: "（既定 / 環境変数）",
+  aiKeyModelOk: (m: string) => `モデルを設定しました: ${m}`,
+  aiKeyModelCleared: "モデル列をクリアしました（ホストの既定・環境変数を使用します）。",
+  aiKeySaveMaybeModelProp: (detail: string) =>
+    `保存に失敗しました。AI Keys DB に **Model**（rich_text）プロパティを追加し、\`/setup-notion\` で再接続（検証）してください。\n\n${detail}`,
   aiKeyListEmpty: "登録されたキーがありません。",
   aiKeyDisabled: "無効化しました。",
   aiKeyRemoved: "削除（アーカイブ）しました。",
@@ -29,6 +34,9 @@ export const ja = {
   projectUpdated: "プロジェクトを更新しました。",
   projectArchived: "プロジェクトをアーカイブしました。",
   todoListEmpty: "表示する Todo がありません。",
+  todoListEmptyScoped: (projectName: string) =>
+    `「${projectName}」に紐づく表示対象の Todo がありません。`,
+  todoListScoped: (projectName: string) => `**${projectName}** で絞り込み\n\n`,
   todoListTitle: "現在の Todo 一覧",
   listIndexHint: "先に `/todo-list` を実行し、番号を確認してください。",
   todoUpdated: "Todo を更新しました。",
@@ -47,6 +55,14 @@ export const ja = {
   usageKeys: (body: string) => body || "キーがありません。",
   todoConfirmTitle: "この内容で Todo を登録しますか？",
   todoConfirmFallback: "確認（通常 Todo モード）",
+  confirmEditSaved:
+    "確認内容を更新しました。「登録する」で確定するか、再度「修正」できます。",
+  confirmEditLineMismatch: (expected: number, got: number) =>
+    `Todo は ${expected} 件ですが、入力は ${got} 行です。改行で件数を合わせてください。`,
+  confirmEditInvalidDue: "期限の形式が不正です。YYYY-MM-DD または ISO 日時、空欄にしてください。",
+  confirmEditInvalidPriority:
+    "優先度は High / Medium / Low のいずれか、または空欄にしてください。",
+  modalTodoEditTitle: "Todo 確認内容の修正",
   registered: (n: number) => `登録完了: ${n} 件`,
   notionSaveFail: (msg: string) => `Notion 保存に失敗: ${msg}`,
   budgetRequests: "本日の AI リクエスト上限に達しました。通常 Todo モードに切り替えます。",
@@ -66,4 +82,20 @@ export const ja = {
   /** AI 有効だが AI Keys DB にキー行がないとき */
   aiKeysHint:
     "AI が有効ですが API キーが未登録です。管理者は `/setup-ai-key add` でキーを追加してください。",
+  memberMapNoDb:
+    "メンバー映射 DB が未設定です。`/setup-notion` の `member_map_database_id` で接続してください。",
+  memberMapListEmpty: "このサーバーの映射行がありません。`/member-map add` で追加できます。",
+  memberMapNoAliases: "（別名なし）",
+  memberMapListLine: (displayName: string, discordUserId: string, aliases: string) =>
+    `• **${displayName}** / ID \`${discordUserId}\`\n  別名: ${aliases}`,
+  memberMapExists: (userId: string) =>
+    `このユーザーは既に登録されています。更新は \`/member-map edit user:<@${userId}>\` を使ってください。`,
+  memberMapAdded: (displayName: string, aliases: string | null) =>
+    `映射を追加しました: **${displayName}**` +
+    (aliases ? `\n別名: ${aliases}` : ""),
+  memberMapUpdated: "映射を更新しました。",
+  memberMapRemoved: "映射を削除（アーカイブ）しました。",
+  memberMapNotFound: "そのユーザーの映射行が見つかりません。",
+  memberMapEditNothing:
+    "変更内容がありません。`display_name`・`aliases` のいずれか、または `clear_aliases: true` を指定してください。",
 } as const;

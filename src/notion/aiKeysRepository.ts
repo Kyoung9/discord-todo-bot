@@ -18,6 +18,8 @@ export type AiKeyRecord = {
   guildId: string;
   provider: LlmProvider | string;
   apiKeyPlain: string;
+  /** このキー用のモデル ID（未設定ならホストの環境変数・デフォルト） */
+  llmModel: string | null;
   priority: number;
   status: string;
   failureCount: number;
@@ -43,6 +45,7 @@ function parseAiKeyPage(page: PageObjectResponse): AiKeyRecord | null {
     guildId,
     provider: provider as LlmProvider,
     apiKeyPlain: apiKey,
+    llmModel: readRichText(page, AI_KEYS_PROPS.model)?.trim() || null,
     priority: readNumber(page, AI_KEYS_PROPS.priority) ?? 1,
     status: readSelectName(page, AI_KEYS_PROPS.status) ?? "active",
     failureCount: readNumber(page, AI_KEYS_PROPS.failureCount) ?? 0,
@@ -262,15 +265,15 @@ export async function createAiKeyPage(params: {
   keyName: string;
   provider: string;
   apiKey: string;
+  llmModel?: string | null;
   priority: number;
   createdBy: string;
   timezone: string;
 }): Promise<void> {
   const now = new Date().toISOString();
   const today = dateKeyInTimeZone(new Date(), params.timezone);
-  await params.client.pages.create({
-    parent: { database_id: params.aiKeysDatabaseId },
-    properties: {
+  const modelTrim = params.llmModel?.trim() || null;
+  const props: Record<string, unknown> = {
       [AI_KEYS_PROPS.name]: {
         title: [{ type: "text", text: { content: params.keyName.slice(0, 2000) } }],
       },
@@ -293,6 +296,35 @@ export async function createAiKeyPage(params: {
         rich_text: [{ type: "text", text: { content: params.createdBy } }],
       },
       [AI_KEYS_PROPS.createdAt]: { date: { start: now } },
+      [AI_KEYS_PROPS.updatedAt]: { date: { start: now } },
+  };
+  if (modelTrim) {
+    props[AI_KEYS_PROPS.model] = {
+      rich_text: [{ type: "text", text: { content: modelTrim.slice(0, 2000) } }],
+    };
+  }
+  await params.client.pages.create({
+    parent: { database_id: params.aiKeysDatabaseId },
+    properties: props as never,
+  });
+}
+
+/** AI Keys 行のモデル ID を更新（空文字でプロパティをクリア） */
+export async function updateAiKeyLlmModel(
+  client: Client,
+  pageId: string,
+  llmModel: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  const trimmed = llmModel?.trim() || null;
+  await client.pages.update({
+    page_id: pageId,
+    properties: {
+      [AI_KEYS_PROPS.model]: trimmed
+        ? {
+            rich_text: [{ type: "text", text: { content: trimmed.slice(0, 2000) } }],
+          }
+        : { rich_text: [] },
       [AI_KEYS_PROPS.updatedAt]: { date: { start: now } },
     } as never,
   });
